@@ -14,6 +14,7 @@ import math, os
 import logging
 import re
 from decimal import *
+
 getcontext().prec = 20
 
 class Command(BaseCommand):
@@ -21,6 +22,7 @@ class Command(BaseCommand):
 
     # source file directory
     mutation_data_path = os.sep.join([settings.DATA_DIR, 'mutational_landscape'])
+    proteins_not_found = []
 
     logger = logging.getLogger(__name__)
 
@@ -33,6 +35,8 @@ class Command(BaseCommand):
             filenames = options['filename']
         else:
             filenames = False
+
+        self.proteins_not_found = []
 
         try:
             self.purge_data()
@@ -64,33 +68,40 @@ class Command(BaseCommand):
         for filename in filenames:
             filepath = os.sep.join([self.mutation_data_path, filename])
 
-            snp_data =  pd.read_csv(filepath, low_memory=False)
+            snp_data = pd.read_csv(filepath, low_memory=False)
 
             for index, entry in enumerate(snp_data.iterrows()):
 
-                entry_name = snp_data[index:index+1]['EntryName'].values[0]
-                sequence_number = snp_data[index:index+1]['SequenceNumber'].values[0]
-                allele_frequency = float(snp_data[index:index+1]['Allele Frequency'].values[0])
-                allele_count = int(snp_data[index:index+1]['Allele Count'].values[0])
-                allele_number = int(snp_data[index:index+1]['Allele Number'].values[0])
-                number_homozygotes = int(snp_data[index:index+1]['Number of Homozygotes'].values[0])
-                type = snp_data[index:index+1]['type'].values[0]
+                entry_name = snp_data[index:index + 1]['EntryName'].values[0]
+                if entry_name in self.proteins_not_found:
+                    continue
+                sequence_number = snp_data[index:index + 1]['SequenceNumber'].values[0]
+                allele_frequency = float(snp_data[index:index + 1]['af'].values[0]) # af/Allele Frequency
+                allele_count = int(snp_data[index:index + 1]['ac'].values[0]) # ac/Allele Count
+                allele_number = int(snp_data[index:index + 1]['an'].values[0]) # an/Allele Number
+                number_homozygotes = int(snp_data[index:index + 1]['ac_hom'].values[0]) # ac_hm/ Number of Homozygotes
+                type = snp_data[index:index + 1]['Type'].values[0]
 
-                if 'lof' in filename:
-                    prot_con = snp_data[index:index+1]['Protein Consequence'].values[0]
+                if type != 'missense':
+                    prot_con = snp_data[index:index + 1]['Protein Consequence'].values[0]
                     splitterm = re.findall(r'\d+', prot_con)[0]
                     amino_acid = prot_con.split(splitterm)[1]
                     sift_score = None
                     polyphen_score = None
                 else:
-                    amino_acid = snp_data[index:index+1]['NMaa'].values[0]
-                    sift_score = float(snp_data[index:index+1]['sift_score'].values[0])
-                    polyphen_score = float(snp_data[index:index+1]['polyphen_score'].values[0])
+                    amino_acid = snp_data[index:index + 1]['NMaa'].values[0]
+                    if 'SigProts' in filename:
+                        sift_score = None
+                        polyphen_score = None
+                    else:
+                        sift_score = float(snp_data[index:index + 1]['sift_score'].values[0])
+                        polyphen_score = float(snp_data[index:index + 1]['polyphen_score'].values[0])
 
 
                 try:
                     p = Protein.objects.get(entry_name=entry_name)
                 except Protein.DoesNotExist:
+                    self.proteins_not_found.append(entry_name)
                     self.logger.warning('Protein not found for entry_name {}'.format(entry_name))
                     continue
 
@@ -126,6 +137,8 @@ class Command(BaseCommand):
             for index, entry in enumerate(cancer_data.iterrows()):
 
                 entry_name = cancer_data[index:index+1]['EntryName'].values[0]
+                if entry_name in self.proteins_not_found:
+                    continue
                 sequence_number = cancer_data[index:index+1]['site'].values[0]
                 amino_acid = cancer_data[index:index+1]['variant'].values[0]
                 # allele_frequency = float(cancer_data[index:index+1]['allelefreq'].values[0])
@@ -134,6 +147,7 @@ class Command(BaseCommand):
                 try:
                     p = Protein.objects.get(entry_name=entry_name)
                 except Protein.DoesNotExist:
+                    self.proteins_not_found.append(entry_name)
                     self.logger.warning('Protein not found for entry_name {}'.format(entry_name))
                     continue
 
@@ -169,12 +183,15 @@ class Command(BaseCommand):
             for index, entry in enumerate(disease_data.iterrows()):
 
                 entry_name = disease_data[index:index+1]['EntryName'].values[0]
+                if entry_name in self.proteins_not_found:
+                    continue
                 sequence_number = disease_data[index:index+1]['site'].values[0]
                 amino_acid = disease_data[index:index+1]['variant'].values[0]
 
                 try:
                     p = Protein.objects.get(entry_name=entry_name)
                 except Protein.DoesNotExist:
+                    self.proteins_not_found.append(entry_name)
                     self.logger.warning('Protein not found for entry_name {}'.format(entry_name))
                     continue
 
@@ -212,6 +229,8 @@ class Command(BaseCommand):
             for index, entry in enumerate(ptm_data.iterrows()):
 
                 entry_name = ptm_data[index:index+1]['EntryName'].values[0]
+                if entry_name in self.proteins_not_found:
+                    continue
                 sequence_number = ptm_data[index:index+1]['SequenceNumber'].values[0]
                 modification = ptm_data[index:index+1]['Type'].values[0]
                 # source = ptm_data[index:index+1]['Source'].values[0]
@@ -219,6 +238,7 @@ class Command(BaseCommand):
                 try:
                     p = Protein.objects.get(entry_name=entry_name)
                 except Protein.DoesNotExist:
+                    self.proteins_not_found.append(entry_name)
                     self.logger.warning('Protein not found for entry_name {}'.format(entry_name))
                     continue
 

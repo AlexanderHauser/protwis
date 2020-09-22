@@ -86,19 +86,17 @@ class Command(BaseCommand):
                     defaults={
                         'category': split_row[1],
                         'fully_aligned': fully_aligned,
-                        'name': split_row[3],
-                        'proteinfamily': split_row[4]
+                        'name': split_row[3]
                     }
 
-                    s, created = ProteinSegment.objects.get_or_create(slug=split_row[0], defaults=defaults)
-                    s.proteinfamily = split_row[4]
+                    s, created = ProteinSegment.objects.get_or_create(slug=split_row[0], proteinfamily=split_row[4], defaults=defaults)
                     s.save()
 
                     if created:
                         self.logger.info('Created protein segment ' + s.name)
-                except:
-                    # print('Failed creating protein segment',row[0])
-                    self.logger.error('Failed creating protein segment',row[0])
+                except Exception as msg:
+                    # print('Failed creating protein segment', split_row, msg)
+                    self.logger.error('Failed creating protein segment', split_row)
                     # continue
 
         self.logger.info('COMPLETED CREATING PROTEIN SEGMENTS')
@@ -121,8 +119,8 @@ class Command(BaseCommand):
                         try:
                             prns = split_row[3]
                             parent = ResidueNumberingScheme.objects.get(slug=prns)
-                        except ResidueNumberingScheme.DoesNotExists:
-                            raise Exception('Parent scheme {} does not exists, aborting!'.format(prns))
+                        except ResidueNumberingScheme.DoesNotExist:
+                            raise Exception('Parent scheme {} does not exist, aborting!'.format(prns))
                         defaults['parent'] = parent
 
                     s, created = ResidueNumberingScheme.objects.get_or_create(slug=split_row[0], defaults=defaults)
@@ -145,7 +143,7 @@ class Command(BaseCommand):
                 self.logger.info('Parsing file {}'.format(source_file_path))
                 # read the yaml file
                 with open(source_file_path, 'r') as f:
-                    ano = yaml.load(f)
+                    ano = yaml.load(f, Loader=yaml.FullLoader)
 
                     # anomaly type
                     if 'anomaly_type' in ano and ano['anomaly_type']:
@@ -161,9 +159,9 @@ class Command(BaseCommand):
                     if 'protein_segment' in ano and ano['protein_segment']:
                         try:
                             ps = ProteinSegment.objects.get(slug=ano['protein_segment'])
-                        except ProteinSegment.DoesNotExists:
+                        except ProteinSegment.DoesNotExist:
                             self.logger.error('Protein segment {} not found, skipping!'.format(
-                                anop['protein_segmemt']))
+                                ano['protein_segment']))
                             continue
 
                     # generic number

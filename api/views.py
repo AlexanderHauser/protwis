@@ -13,6 +13,7 @@ from protein.models import Protein, ProteinConformation, ProteinFamily, Species,
 from residue.models import Residue, ResidueGenericNumber, ResidueNumberingScheme, ResidueGenericNumberEquivalent
 from structure.models import Structure
 from structure.assign_generic_numbers_gpcr import GenericNumbering
+from structure.sequence_parser import SequenceParser
 from api.serializers import (ProteinSerializer, ProteinFamilySerializer, SpeciesSerializer, ResidueSerializer,
                              ResidueExtendedSerializer, StructureSerializer,
                              StructureLigandInteractionSerializer,
@@ -24,7 +25,7 @@ from drugs.models import Drugs
 
 import json, os
 from io import StringIO
-from Bio.PDB import PDBIO
+from Bio.PDB import PDBIO, parse_pdb_header
 from collections import OrderedDict
 
 # FIXME add
@@ -47,7 +48,7 @@ class ProteinDetail(generics.RetrieveAPIView):
     \n{entry_name} is a protein identifier from Uniprot, e.g. adrb2_human
     """
 
-    queryset = Protein.objects.filter(sequence_type__slug="wt")
+    queryset = Protein.objects.filter(sequence_type__slug="wt").prefetch_related('family', 'species', 'source', 'residue_numbering_scheme', 'genes')
     serializer_class = ProteinSerializer
     lookup_field = 'entry_name'
 
@@ -68,7 +69,7 @@ class ProteinFamilyList(generics.ListAPIView):
     \n/proteinfamily/
     """
 
-    queryset = ProteinFamily.objects.all()
+    queryset = ProteinFamily.objects.all().prefetch_related('parent')
     serializer_class = ProteinFamilySerializer
 
 
@@ -79,7 +80,7 @@ class ProteinFamilyDetail(generics.RetrieveAPIView):
     \n{slug} is a protein family identifier, e.g. 001_001_001
     """
 
-    queryset = ProteinFamily.objects.all()
+    queryset = ProteinFamily.objects.all().prefetch_related("parent")
     serializer_class = ProteinFamilySerializer
     lookup_field = 'slug'
 
@@ -95,7 +96,7 @@ class ProteinFamilyChildrenList(generics.ListAPIView):
 
     def get_queryset(self):
         family = self.kwargs.get('slug')
-        queryset = ProteinFamily.objects.all()
+        queryset = ProteinFamily.objects.all().prefetch_related("parent")
         return queryset.filter(parent__slug=family)
 
 
@@ -110,7 +111,7 @@ class ProteinFamilyDescendantList(generics.ListAPIView):
 
     def get_queryset(self):
         family = self.kwargs.get('slug')
-        queryset = ProteinFamily.objects.all()
+        queryset = ProteinFamily.objects.all().prefetch_related("parent")
         return queryset.filter(Q(slug__startswith=family) & ~Q(slug=family))
 
 
@@ -126,7 +127,9 @@ class ProteinsInFamilyList(generics.ListAPIView):
     def get_queryset(self):
         queryset = Protein.objects.all()
         family = self.kwargs.get('slug')
-        return queryset.filter(sequence_type__slug='wt', family__slug__startswith=family)
+
+        return queryset.filter(sequence_type__slug='wt', family__slug__startswith=family)\
+                    .prefetch_related('family', 'species', 'source', 'residue_numbering_scheme', 'genes')
 
 
 class ProteinsInFamilySpeciesList(generics.ListAPIView):
@@ -144,7 +147,8 @@ class ProteinsInFamilySpeciesList(generics.ListAPIView):
         family = self.kwargs.get('slug')
         species = self.kwargs.get('latin_name')
         return queryset.filter(sequence_type__slug='wt', family__slug__startswith=family,
-                               species__latin_name=species)
+                               species__latin_name=species).prefetch_related('family',
+                               'species', 'source', 'residue_numbering_scheme', 'genes')
 
 
 class ResiduesList(generics.ListAPIView):
@@ -160,7 +164,7 @@ class ResiduesList(generics.ListAPIView):
         queryset = Residue.objects.all()
         #protein_conformation__protein__sequence_type__slug='wt',
         return queryset.filter(
-            protein_conformation__protein__entry_name=self.kwargs.get('entry_name'))
+            protein_conformation__protein__entry_name=self.kwargs.get('entry_name')).prefetch_related('display_generic_number','protein_segment','alternative_generic_numbers')
 
 
 class ResiduesExtendedList(ResiduesList):
@@ -319,7 +323,6 @@ class FamilyAlignment(views.APIView):
     """
 
     def get(self, request, slug=None, segments=None, latin_name=None, statistics=False):
-        print(statistics)
         if slug is not None:
             # Check for specific species
             if latin_name is not None:
@@ -329,13 +332,17 @@ class FamilyAlignment(views.APIView):
                 ps = Protein.objects.filter(sequence_type__slug='wt', source__id=1, family__slug__startswith=slug)
 
             # take the numbering scheme from the first protein
-            s_slug = Protein.objects.get(entry_name=ps[0]).residue_numbering_scheme_id
+            #s_slug = Protein.objects.get(entry_name=ps[0]).residue_numbering_scheme_id
+            s_slug = ps[0].residue_numbering_scheme_id
+
+            protein_family = ps[0].family.slug[:3]
 
             gen_list = []
             segment_list = []
             if segments is not None:
                 input_list = segments.split(",")
                 # fetch a list of all segments
+
                 protein_segments = ProteinSegment.objects.filter(partial=False).values_list('slug', flat=True)
                 for s in input_list:
                     # add to segment list
@@ -352,6 +359,14 @@ class FamilyAlignment(views.APIView):
                 ss = ProteinSegment.objects.filter(slug__in=segment_list, partial=False)
             else:
                 ss = ProteinSegment.objects.filter(partial=False)
+
+            if int(protein_family) < 100:
+                ss = [ s for s in ss if s.proteinfamily == 'GPCR']
+            elif protein_family == "100":
+                ss = [ s for s in ss if s.proteinfamily == 'Gprotein']
+            elif protein_family == "200":
+                ss = [ s for s in ss if s.proteinfamily == 'Arrestin']
+
             # create an alignment object
             a = Alignment()
             a.show_padding = False
@@ -420,6 +435,14 @@ class FamilyAlignmentPartial(FamilyAlignment):
     generic GPCRdb numbers, e.g. TM2,TM3,ECL2,4x50
     """
 
+class FamilyAlignmentSpecies(FamilyAlignment):
+    """
+    Get a full sequence alignment of a protein family
+    \n/alignment/family/{slug}//{species}
+    \n{slug} is a protein family identifier, e.g. 001_001_001
+    \n{species} is a species identifier from Uniprot, e.g. Homo sapiens
+    """
+
 class FamilyAlignmentPartialSpecies(FamilyAlignment):
     """
     Get a partial sequence alignment of a protein family
@@ -434,7 +457,7 @@ class FamilyAlignmentPartialSpecies(FamilyAlignment):
 class ProteinSimilaritySearchAlignment(views.APIView):
     """
     Get a segment sequence alignment of two or more proteins ranked by similarity
-    \n/alignment/similarity/{proteins}/
+    \n/alignment/similarity/{proteins}/{segments}/
     \n{proteins} is a comma separated list of protein identifiers, e.g. adrb2_human,5ht2a_human,cxcr4_human,
     where the first protein is the query protein and the following the proteins to compare it to
     \n{segments} is a comma separated list of protein segment identifiers and/ or
@@ -451,12 +474,14 @@ class ProteinSimilaritySearchAlignment(views.APIView):
             # take the numbering scheme from the first protein
             s_slug = Protein.objects.get(entry_name=protein_list[0]).residue_numbering_scheme_id
 
+            protein_family = ps[0].family.slug[:3]
+
+            gen_list = []
+            segment_list = []
             if segments is not None:
                 input_list = segments.split(",")
                 # fetch a list of all segments
                 protein_segments = ProteinSegment.objects.filter(partial=False).values_list('slug', flat=True)
-                gen_list = []
-                segment_list = []
                 for s in input_list:
                     # add to segment list
                     if s in protein_segments:
@@ -470,17 +495,27 @@ class ProteinSimilaritySearchAlignment(views.APIView):
 
                 # fetch all complete protein_segments
                 ss = ProteinSegment.objects.filter(slug__in=segment_list, partial=False)
+            else:
+                ss = ProteinSegment.objects.filter(partial=False)
+
+            if int(protein_family) < 100:
+                ss = [ s for s in ss if s.proteinfamily == 'GPCR']
+            elif protein_family == "100":
+                ss = [ s for s in ss if s.proteinfamily == 'Gprotein']
+            elif protein_family == "200":
+                ss = [ s for s in ss if s.proteinfamily == 'Arrestin']
 
             # create an alignment object
             a = Alignment()
             a.show_padding = False
 
             # load data from API into the alignment
-            a.load_reference_protein(reference)
+            a.load_reference_protein(reference[0])
             a.load_proteins(ps)
 
             # load generic numbers and TMs seperately
-            a.load_segments(gen_list)
+            if gen_list:
+                a.load_segments(gen_list)
             a.load_segments(ss)
 
             # build the alignment data matrix
@@ -527,12 +562,16 @@ class ProteinAlignment(views.APIView):
             ps = Protein.objects.filter(sequence_type__slug='wt', entry_name__in=protein_list)
 
             # take the numbering scheme from the first protein
-            s_slug = Protein.objects.get(entry_name=protein_list[0]).residue_numbering_scheme_id
+            #s_slug = Protein.objects.get(entry_name=protein_list[0]).residue_numbering_scheme_id
+            s_slug = ps[0].residue_numbering_scheme_id
+
+            protein_family = ps[0].family.slug[:3]
 
             gen_list = []
             segment_list = []
             if segments is not None:
                 input_list = segments.split(",")
+
                 # fetch a list of all segments
                 protein_segments = ProteinSegment.objects.filter(partial=False).values_list('slug', flat=True)
                 for s in input_list:
@@ -547,9 +586,15 @@ class ProteinAlignment(views.APIView):
 
                 # fetch all complete protein_segments
                 ss = ProteinSegment.objects.filter(slug__in=segment_list, partial=False)
-
             else:
                 ss = ProteinSegment.objects.filter(partial=False)
+
+            if int(protein_family) < 100:
+                ss = [ s for s in ss if s.proteinfamily == 'GPCR']
+            elif protein_family == "100":
+                ss = [ s for s in ss if s.proteinfamily == 'Gprotein']
+            elif protein_family == "200":
+                ss = [ s for s in ss if s.proteinfamily == 'Arrestin']
 
             # create an alignment object
             a = Alignment()
@@ -692,8 +737,8 @@ class StructureAssignGenericNumbers(views.APIView):
 
     def post(self, request):
 
-        root, ext = os.path.splitext(request.FILES['pdb_file'].name)
-        generic_numbering = GenericNumbering(StringIO(request.FILES['pdb_file'].file.read().decode('UTF-8',"ignore")))
+        # root, ext = os.path.splitext(request._request.FILES['pdb_file'].name)
+        generic_numbering = GenericNumbering(StringIO(request._request.FILES['pdb_file'].file.read().decode('UTF-8',"ignore")))
         out_struct = generic_numbering.assign_generic_numbers()
         out_stream = StringIO()
         io = PDBIO()
@@ -712,13 +757,13 @@ class StructureSequenceParser(views.APIView):
     curl -X POST -F "pdb_file=@myfile.pdb" http://gpcrdb.org/services/structure/parse_pdb
     """
     parser_classes = (FileUploadParser,)
-    renderer_classes =(JSONRenderer)
+    renderer_classes = (JSONRenderer, )
 
     def post(self, request):
-
-        root, ext = os.path.splitext(request.FILES['pdb_file'].name)
-        header = parse_pdb_header(request.FILES['pdb_file'])
-        parser = SequenceParser(request.FILES['pdb_file'])
+        # root, ext = os.path.splitext(request._request.FILES['pdb_file'].name)
+        pdb_file = StringIO(request._request.FILES['pdb_file'].file.read().decode('UTF-8',"ignore"))
+        header = parse_pdb_header(pdb_file)
+        parser = SequenceParser(pdb_file)
 
         json_data = OrderedDict()
         json_data["header"] = header
@@ -744,7 +789,8 @@ class StructureLigandInteractions(generics.ListAPIView):
                                              'fragment__residue__generic_number',
                                              'fragment__residue__display_generic_number',
                                              )
-        queryset = queryset.exclude(interaction_type__type='hidden').order_by('fragment__residue__sequence_number')
+        #queryset = queryset.exclude(interaction_type__type='hidden').order_by('fragment__residue__sequence_number')
+        queryset = queryset.order_by('fragment__residue__sequence_number')
         slug = self.kwargs.get('pdb_code')
         return queryset.filter(structure_ligand_pair__structure__pdb_code__index=slug,
                                structure_ligand_pair__annotated=True)

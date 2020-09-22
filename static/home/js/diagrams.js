@@ -154,13 +154,14 @@ function hideToolTip(plotid) {
     tipElement.setAttribute('visibility', 'hidden');
 }
 
-function toggleLoop(id,type, skipmaxmin) {
+function toggleLoop(id, type, skipmaxmin, el) {
+  svg = $(el).closest('svg');
     if (type=='long') {
-      $(id+".long").hide();
-      $(id+".short").show();
+      svg.find(id+".long").hide();
+      svg.find(id+".short").show();
     } else {
-      $(id+".long").show();
-      $(id+".short").hide();
+      svg.find(id+".long").show();
+      svg.find(id+".short").hide();
     }
     // $(id+".long").each(function () {
     //     curr = $(this).css("display");
@@ -393,6 +394,7 @@ function maxmin() {
     classmax = '';
     classmin = '';
     counter = 0;
+    if (!$('#snake').length) return
     // console.log("temp",y_max,y_min);
     $('#snake').children('.rtext').each(function () {
         counter += 1;
@@ -820,6 +822,9 @@ function ajaxBarcode(plotid,protein) {
         } else if (val[1]=='Evolutionary neutral') {
             color = "#f8dfb4";
             extra = "\n" + String(val[1]);
+        } else if (val[1]=='NA') {
+            color = "#ffffff"
+            extra = "\n" + String(val[1]);
         } else  {
             color = "#4dc7e6";
             extra = "\n" + String(val[1]);
@@ -927,7 +932,7 @@ function ajaxNaturalMutationPos(plotid) {
     var color_code = pos['color']
 
       $.each(pos, function( key, val ) {
-         console.log("Yes", pos);
+         //console.log("Yes", pos);
 
          extra = "\nVariants: " + "-->" + String(val['AA']) +
         "\nNumber of Proteins: " + String(val['val']);
@@ -1218,6 +1223,8 @@ $(".pick-color").click(function() {
 $( document ).ready(function() {
   if ( $( "#cp2_helixbox" ).length ) {
     $('#cp2_helixbox').colorpicker();
+  }
+  if ( $( "#cp2_snakeplot" ).length ) {
     $('#cp2_snakeplot').colorpicker();
   }
 });

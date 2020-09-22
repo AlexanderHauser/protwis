@@ -22,6 +22,7 @@ from Bio.PDB import PDBParser,PPBuilder
 from Bio import pairwise2
 
 from structure.assign_generic_numbers_gpcr import GenericNumbering
+from structure.functions import StructureBuildCheck
 from ligand.models import Ligand, LigandType, LigandRole, LigandProperities
 from interaction.models import *
 from interaction.views import runcalculation,parsecalculation
@@ -97,11 +98,11 @@ class Command(BaseBuild):
     ### USE below to fix seg ends
     xtal_seg_end_file = os.sep.join([settings.DATA_DIR, 'structure_data', 'annotation', 'mod_xtal_segends.yaml'])
     with open(xtal_seg_end_file, 'r') as f:
-        xtal_seg_ends = yaml.load(f)
+        xtal_seg_ends = yaml.load(f, Loader=yaml.FullLoader)
 
     xtal_anomalies_file = os.sep.join([settings.DATA_DIR, 'structure_data', 'annotation', 'all_anomalities.yaml'])
     with open(xtal_anomalies_file, 'r') as f2:
-        xtal_anomalies = yaml.load(f2)
+        xtal_anomalies = yaml.load(f2, Loader=yaml.FullLoader)
 
     s = ProteinSegment.objects.all()
     segments = {}
@@ -164,18 +165,20 @@ class Command(BaseBuild):
         mapped_seq = {} # index in contruct, tuple of AA and WT [position,AA]
         debug = False
         preferred_chain = structure.preferred_chain
+        wt_pdb_lookup = []
 
         if len(preferred_chain.split(','))>1: #if A,B
             preferred_chain = preferred_chain.split(',')[0]
 
 
         AA = {'ALA':'A', 'ARG':'R', 'ASN':'N', 'ASP':'D',
-     'CYS':'C', 'GLN':'Q', 'GLU':'E', 'GLY':'G',
-     'HIS':'H', 'ILE':'I', 'LEU':'L', 'LYS':'K',
-     'MET':'M', 'PHE':'F', 'PRO':'P', 'SER':'S',
-     'THR':'T', 'TRP':'W', 'TYR':'Y', 'VAL':'V'}
+             'CYS':'C', 'GLN':'Q', 'GLU':'E', 'GLY':'G',
+             'HIS':'H', 'ILE':'I', 'LEU':'L', 'LYS':'K',
+             'MET':'M', 'PHE':'F', 'PRO':'P', 'SER':'S',
+             'THR':'T', 'TRP':'W', 'TYR':'Y', 'VAL':'V',
+             'YCM':'C', 'CSD':'C', 'TYS':'Y', 'SEP':'S', 'TPO':'T'} #non-standard AAs
 
-        atom_num_dict = {'E':9, 'S':6, 'Y':12, 'G':4, 'A':5, 'V':7, 'M':8, 'L':8, 'I':8, 'T':7, 'F':11, 'H':10, 'K':9, 
+        atom_num_dict = {'E':9, 'S':6, 'Y':12, 'G':4, 'A':5, 'V':7, 'M':8, 'L':8, 'I':8, 'T':7, 'F':11, 'H':10, 'K':9,
                          'D':8, 'C':6, 'R':11, 'P':7, 'Q':9, 'N':8, 'W':14}
 
 
@@ -185,7 +188,7 @@ class Command(BaseBuild):
         # print(d['deletions'])
         deletions = []
         ## Remove WT ranges that arent in xtal (no need to try to map them)
-        #print(d)
+        # print(d)
         if 'deletions' in d:
             for del_range in d['deletions']:
                 if del_range['start']==146 and structure.pdb_code.index=='4K5Y':
@@ -194,15 +197,14 @@ class Command(BaseBuild):
                 for i in range(del_range['start'],del_range['end']+1):
                     deletions.append(i)
             #print("Annotation missing WT residues",d['deletions'])
-
-
         removed = []
         ## Remove segments that arent receptor (tags, fusion etc)
         if 'xml_segments' in d:
             for seg in d['xml_segments']:
-                #print(seg)
                 if seg[1]:
-                    if seg[1][0]!=entry_name:
+                    # Odd rules to fit everything..
+                    # print(seg[1][0], entry_name)
+                    if seg[1][0]!=entry_name and seg[-1]!=True and seg[1][0]!='Uncharacterized protein' and 'receptor' not in seg[1][0]:
                         if seg[0].split("_")[1]==preferred_chain:
                             #print(seg[2],seg[3]+1)
                             #for i in range(seg[2],seg[3]+1):
@@ -210,14 +212,35 @@ class Command(BaseBuild):
                             for i in seg[6]:
                                 removed.append(i)
         # Reset removed, since it causes more problems than not
-        removed = []
+
+        # Overwrite reset to fix annotation
+        if structure.pdb_code.index in ['6H7N','6H7J','6H7L','6H7M','6H7O','6IBL']:
+            removed = list(range(3,40))
+            deletions = deletions+[271]
+        elif structure.pdb_code.index=='6MEO':
+            removed = []
+        elif structure.pdb_code.index=='5N2R':
+            deletions = [1]+list(range(209,219))+list(range(306,413))
+        elif structure.pdb_code.index in ['5WIU','5WIV']:
+            removed = removed+[1001]
+        elif structure.pdb_code.index=='6QZH':
+            removed = list(range(248,252))+list(range(1001,1473))+list(range(255,260))
+        elif structure.pdb_code.index in ['6KUX', '6KUY']:
+            deletions = list(range(1,20))
+        elif structure.pdb_code.index=='7BZ2':
+            deletions = list(range(240,265))
+        elif structure.pdb_code.index=='7C6A':
+            removed = list(range(1,35))
+        # print('removed',removed)
+        # removed = []
         if len(deletions)>len(d['wt_seq'])*0.9:
-            #if too many deltions
+            #if too many deletions
             removed = []
             deletions = []
 
         s = PDBParser(PERMISSIVE=True, QUIET=True).get_structure('ref', pdb_path)[0]
         chain = s[preferred_chain] #select only one chain (avoid n-mer receptors)
+
         ppb=PPBuilder()
         seq = ''
         i = 1
@@ -248,14 +271,23 @@ class Command(BaseBuild):
         check_1000 = 0
         prev_id = 0
         bigjump = False
-        for pp in ppb.build_peptides(chain): #remove >1000 pos (fusion protein / gprotein)
+        all_pdb_residues_in_chain = 0
+        for pp in ppb.build_peptides(chain, aa_only=False): #remove >1000 pos (fusion protein / gprotein)
+            for i,res in enumerate(pp,1 ):
+                all_pdb_residues_in_chain += 1
+                residue_id = res.get_full_id()
+
+        if len(removed)+100>all_pdb_residues_in_chain:
+            print(structure,'More (or almost) sequence set to be removed from sequence',len(removed),' than exists',all_pdb_residues_in_chain,' removing removed[]')
+            #print(removed)
+            removed = []
+        
+        for pp in ppb.build_peptides(chain, aa_only=False): #remove >1000 pos (fusion protein / gprotein)
             for i,res in enumerate(pp,1 ):
                 id = res.id
                 residue_id = res.get_full_id()
-                # print(i,id[1],AA[res.resname])
                 if id[1] in removed:
                     chain.detach_child(id)
-                    # print("removed")
                     continue
                 # if id[1]<600:
                 #     check_1000 += 1
@@ -281,7 +313,7 @@ class Command(BaseBuild):
             ranges.append((group[0], group[-1]))
         if debug: print("Removed XTAL positions due to not being WT receptor",ranges)
         i = 1
-        for pp in ppb.build_peptides(chain):
+        for pp in ppb.build_peptides(chain, aa_only=False):
             seq += str(pp.get_sequence()) #get seq from fasta (only chain A)
             for residue in pp:
                 residue_id = residue.get_full_id()
@@ -289,9 +321,11 @@ class Command(BaseBuild):
                 if chain not in pdbseq:
                     pdbseq[chain] = {}
                 pos = residue_id[3][1]
-                pdbseq[chain][pos] = [i,AA[residue.resname]]
-                i += 1
 
+                if residue.resname != "NH2": # skip amidation of peptide
+                    pdbseq[chain][pos] = [i, AA[residue.resname]]
+                    i += 1
+        
         parent_seq_protein = str(structure.protein_conformation.protein.parent.sequence)
         # print(structure.protein_conformation.protein.parent.entry_name)
         rs = Residue.objects.filter(protein_conformation__protein=structure.protein_conformation.protein.parent).prefetch_related('display_generic_number','generic_number','protein_segment')
@@ -308,21 +342,48 @@ class Command(BaseBuild):
             # wt_lookup[r.sequence_number] = r
             wt_lookup[i] = r
             parent_seq += r.amino_acid
-
         # if parent_seq != parent_seq_protein:
         #     print('Residues sequence differ from sequence in protein',structure.protein_conformation.protein.parent.entry_name,structure.pdb_code.index)
 
         if len(wt_lookup)==0:
             print("No residues for",structure.protein_conformation.protein.parent.entry_name)
             return None
-
+        # print(parent_seq)
+        # print(seq)
+        # print('parent_seq',len(parent_seq),'pdb_seq',len(seq))
         #align WT with structure seq -- make gaps penalties big, so to avoid too much overfitting
-        pw2 = pairwise2.align.localms(parent_seq, seq, 5, -4, -5, -2)
+
+        if structure.pdb_code.index in ['6NBI','6NBF','6NBH','6U1N']:
+            pw2 = pairwise2.align.localms(parent_seq, seq, 3, -4, -3, -1)
+        elif structure.pdb_code.index in ['6KUX', '6KUY', '6KUW']:
+            pw2 = pairwise2.align.localms(parent_seq, seq, 3, -4, -4, -1.5)
+        else:
+            pw2 = pairwise2.align.localms(parent_seq, seq, 3, -4, -5, -2)
 
         gaps = 0
         unmapped_ref = {}
-        for i, r in enumerate(pw2[0][0], 1): #loop over alignment to create lookups (track pos)
-#            print(i,r,pw2[0][1][i-1]) #print alignment for sanity check
+        ref_seq, temp_seq = str(pw2[0][0]), str(pw2[0][1])
+        # if structure.pdb_code.index in ['5WIU','5WIV']:
+        #     temp_seq = temp_seq[:144]+'D'+temp_seq[145:]
+        #     temp_seq = temp_seq[:149]+'-'+temp_seq[150:]
+        if structure.pdb_code.index=='5ZKP':
+            ref_seq = ref_seq[:197]+'-'+ref_seq[198:]
+            ref_seq = ref_seq[:198]+'A'+ref_seq[199:]
+        elif structure.pdb_code.index in ['5VEW','5VEX']:
+            ref_seq = ref_seq[:164]+'IG'+ref_seq[167:]
+            temp_seq = temp_seq[:166]+temp_seq[167:]
+        elif structure.pdb_code.index in ['3V2W']:
+            ref_seq = ref_seq[:201]+ref_seq[202:]
+            temp_seq = temp_seq[:207]+temp_seq[208:]
+        elif structure.pdb_code.index in ['3V2Y']:
+            ref_seq = ref_seq[:209]+ref_seq[210:]
+            temp_seq = temp_seq[:215]+temp_seq[216:]
+        elif structure.pdb_code.index in ['6KUX','6KUY']:
+            ref_seq = ref_seq[:416]+('-'*(416-233))+ref_seq[416:]
+            temp_seq = temp_seq[:233]+('-'*(416-233))+temp_seq[233:]
+
+        for i, r in enumerate(ref_seq, 1): #loop over alignment to create lookups (track pos)
+            # print(i,r,temp_seq[i-1]) #print alignment for sanity check
             if r == "-":
                 gaps += 1
             if r != "-":
@@ -330,20 +391,22 @@ class Command(BaseBuild):
             elif r == "-":
                 ref_positions[i] = [None,'-']
 
-            if pw2[0][1][i-1]=='-':
+            if temp_seq[i-1]=='-':
                 unmapped_ref[i-gaps] = '-'
 
         gaps = 0
-        for i, r in enumerate(pw2[0][1], 1): #make second lookup
-            #print(i,r,pw2[0][0][i-1]) #print alignment for sanity check
+        for i, r in enumerate(temp_seq, 1): #make second lookup
+            # print(i,r,ref_seq[i-1]) #print alignment for sanity check
             if r == "-":
                 gaps += 1
             if r != "-":
                 mapped_seq[i-gaps] = [r,ref_positions[i]]
-                # if r!=pw2[0][0][i-1]:
+                # if r!=ref_seq[i-1]:
                 #     print('aa mismatch')
         # print("seg res not mapped",gaps)
-
+        # import pprint
+        # print(deletions)
+        # pprint.pprint(mapped_seq)
         pdb = structure.pdb_data.pdb
         protein_conformation=structure.protein_conformation
         temp = ''
@@ -360,7 +423,7 @@ class Command(BaseBuild):
         pdblines_temp = pdb.splitlines()
         pdblines = []
         for line in pdblines_temp: #Get rid of all odd records
-            if line.startswith('ATOM'):
+            if line.startswith('ATOM') or (line[17:20] in ['YCM','CSD','TYS','SEP'] and line.startswith('HETATM')):
                 pdblines.append(line)
         pdblines.append('') #add a line to not "run out"
         rotamer_bulk = []
@@ -369,16 +432,24 @@ class Command(BaseBuild):
         if structure.pdb_code.index=='5LWE':
             seg_ends['5b'] = 209
             seg_ends['5e'] = 244
+        # import pprint
+        # pprint.pprint(wt_lookup)
+        # pprint.pprint(mapped_seq)
+        # pprint.pprint(unmapped_ref)
+        # print('deletions: ',deletions)
+        # print('removed: ',removed)
         for i,line in enumerate(pdblines):
             # print(line)
-            if line.startswith('ATOM'):
+            if line.startswith('ATOM') or (line[17:20] in ['YCM','CSD','TYS','SEP'] and line.startswith('HETATM')):
+                # if line[17:20] in ['YCM','CSD','TYS','SEP']: # sanity check for non-standard helix residues
+                #     print(line)
                 chain = line[21]
                 if preferred_chain and chain!=preferred_chain: #If perferred is defined and is not the same as the current line, then skip
                     pass
                 else:
                     nextline = pdblines[i+1]
                     residue_number = line[22:26].strip()
-                    if (check==0 or nextline[22:26].strip()==check) and nextline.startswith('TER')==False and nextline.startswith('ATOM')==True: #If this is either the begining or the same as previous line add to current rotamer
+                    if (check==0 or nextline[22:26].strip()==check) and nextline.startswith('TER')==False and (nextline.startswith('ATOM')==True or nextline.startswith('HETATM')==True): #If this is either the begining or the same as previous line add to current rotamer
                         temp += line + "\n"
                         #print('same res',pdb.splitlines()[i+1])
                     else: #if this is a new residue
@@ -386,7 +457,7 @@ class Command(BaseBuild):
                         temp += line + "\n"
                         #(int(check.strip())<2000 or structure.pdb_code.index=="4PHU") and
                         if int(check.strip()) not in removed:
-                            #print(line)
+                            # print(line)
                             residue = Residue()
                             residue.sequence_number = int(check.strip())
                             residue.amino_acid = AA[residue_name.upper()]
@@ -411,10 +482,11 @@ class Command(BaseBuild):
                                     not_matched +=1
                                 else:
                                     wt_r = wt_lookup[mapped_seq[seq_num_pos][1][0]]
+                                    # print(seq_num_pos, mapped_seq[seq_num_pos], wt_r, residue.sequence_number, residue.amino_acid) #sanity check for mapped resis
                                     if residue.sequence_number!=wt_r.sequence_number and residue.amino_acid!=wt_r.amino_acid and residue.sequence_number in wt_lookup: #if pos numbers not work -- see if the pos number might be in WT and unmapped
                                         if wt_lookup[residue.sequence_number].amino_acid==residue.amino_acid:
                                             if residue.sequence_number in unmapped_ref: #WT was not mapped, so could be it
-                                               # print(residue.sequence_number,residue.amino_acid) #sanity check
+                                                # print(residue.sequence_number,residue.amino_acid) #sanity check
                                                 # print('wrongly matched, better match on pos+aa',residue.sequence_number,residue.amino_acid,wt_r.sequence_number,wt_r.amino_acid)
                                                 wt_r = wt_lookup[residue.sequence_number]
                                                 matched_by_pos +=1
@@ -426,19 +498,23 @@ class Command(BaseBuild):
                                                 #print('could have been matched, but already aligned to another position',residue.sequence_number,residue.amino_acid,wt_r.sequence_number,wt_r.amino_acid)
                                         else:
                                             # print('WT pos not same AA, mismatch',residue.sequence_number,residue.amino_acid,wt_r.sequence_number,wt_r.amino_acid)
+                                            wt_pdb_lookup.append(OrderedDict([('WT_POS',wt_r.sequence_number), ('PDB_POS',residue.sequence_number), ('AA','.')]))
                                             mismatch_seq += 1
                                             aa_mismatch += 1
                                     elif residue.sequence_number!=wt_r.sequence_number:
-                                        #print('WT pos not same pos, mismatch',residue.sequence_number,residue.amino_acid,wt_r.sequence_number,wt_r.amino_acid)
-                                        if residue.sequence_number in unmapped_ref:
-                                            #print('residue.sequence_number',residue.sequence_number,'not mapped though')
-                                            if residue.amino_acid == wt_lookup[residue.sequence_number].amino_acid:
-                                                #print('they are same amino acid!')
-                                                wt_r = wt_lookup[residue.sequence_number]
-                                                mismatch_seq -= 1
+                                        # print('WT pos not same pos, mismatch',residue.sequence_number,residue.amino_acid,wt_r.sequence_number,wt_r.amino_acid)
+                                        wt_pdb_lookup.append(OrderedDict([('WT_POS',wt_r.sequence_number), ('PDB_POS',residue.sequence_number), ('AA',wt_r.amino_acid)]))
+                                        if structure.pdb_code.index not in ['4GBR','6C1R','6C1Q']:
+                                            if residue.sequence_number in unmapped_ref:
+                                                #print('residue.sequence_number',residue.sequence_number,'not mapped though')
+                                                if residue.amino_acid == wt_lookup[residue.sequence_number].amino_acid:
+                                                    #print('they are same amino acid!')
+                                                    wt_r = wt_lookup[residue.sequence_number]
+                                                    mismatch_seq -= 1
                                         mismatch_seq += 1
                                         ### REPLACE seq number with WT to fix odd PDB annotation. FIXME kinda dangerous, but best way to ensure consistent GN numbering
-                                        residue.sequence_number = wt_r.sequence_number
+                                        ### 2019.01.18 DISABLED underneat, to be sure that sequence number can be found in DB correctly.
+                                        # residue.sequence_number = wt_r.sequence_number
 
                                     if residue.amino_acid!=wt_r.amino_acid:
                                         if debug: print('aa mismatch',residue.sequence_number,residue.amino_acid,wt_r.sequence_number,wt_r.amino_acid)
@@ -452,11 +528,11 @@ class Command(BaseBuild):
                                     else:
                                         residue.display_generic_number = None
                                         residue.generic_number = None
-                                        #print('no GN')
+                                        # print('no GN')
 
                                     residue.protein_segment = wt_r.protein_segment
                                     residue.missing_gn = False
-                                    
+                                    # print(residue, residue.protein_segment, residue.display_generic_number, wt_r, wt_r.protein_segment, wt_r.display_generic_number)
                                     if len(seg_ends):
                                         if residue.protein_segment.slug=='TM1':
                                             if seg_ends['1b']!='-' and seg_ends['1e']!='-':
@@ -635,7 +711,6 @@ class Command(BaseBuild):
                                                 if residue.sequence_number<=seg_ends['8e']:
                                                     residue.protein_segment = self.segments['H8']
 
-
                                         residue.sequence_number = int(check.strip())
                                         #HAVE TO RESET SO IT FITS FOR INTERACTION SCRIPT
 
@@ -793,7 +868,7 @@ class Command(BaseBuild):
 
         rotamer_bulk = []
         for i,res in enumerate(bulked_res):
-            rotamer_bulk.append(Rotamer(residue=res, structure=structure, pdbdata=bulked_rot[i][0], 
+            rotamer_bulk.append(Rotamer(residue=res, structure=structure, pdbdata=bulked_rot[i][0],
                                         missing_atoms=bulked_rot[i][1]))
 
         Rotamer.objects.bulk_create(rotamer_bulk)
@@ -805,101 +880,24 @@ class Command(BaseBuild):
             print("Present helices:",segments_present)
             print("MISSING HELICES?!")
         if debug: print("===============**================")
+
+        if not os.path.exists(os.sep.join([settings.DATA_DIR, 'structure_data', 'wt_pdb_lookup'])):
+            os.makedirs(os.sep.join([settings.DATA_DIR, 'structure_data', 'wt_pdb_lookup']))
+        wt_pdb_lookup_folder = os.sep.join([settings.DATA_DIR, 'structure_data', 'wt_pdb_lookup', str(structure) + '.json'])
+        if len(wt_pdb_lookup)>0:
+            with open(wt_pdb_lookup_folder, 'w') as f2:
+                json.dump(wt_pdb_lookup, f2)
+        elif os.path.exists(os.sep.join([settings.DATA_DIR, 'structure_data', 'wt_pdb_lookup', str(structure) + '.json'])):
+            os.remove(os.sep.join([settings.DATA_DIR, 'structure_data', 'wt_pdb_lookup', str(structure) + '.json']))
         return None
-
-    def purge_contact_network(self,s):
-
-        ii = Interaction.objects.filter(
-            interacting_pair__referenced_structure=s
-        ).all()
-
-        for i in ii:
-            i.delete()
 
 
     def build_contact_network(self,s,pdb_code):
         try:
-            interacting_pairs = compute_interactions(pdb_code)
+            interacting_pairs, distances  = compute_interactions(pdb_code, save_to_db=True)
         except:
             self.logger.error('Error with computing interactions (%s)' % (pdb_code))
             return
-
-        for p in interacting_pairs:
-            # Create the pair
-            res1_seq_num = p.get_residue_1().id[1]
-            res2_seq_num = p.get_residue_2().id[1]
-            conformation = s.protein_conformation
-
-            # Get the residues
-            try:
-                res1 = Residue.objects.get(sequence_number=res1_seq_num, protein_conformation=conformation)
-                res2 = Residue.objects.get(sequence_number=res2_seq_num, protein_conformation=conformation)
-            except Residue.DoesNotExist:
-                self.logger.warning('Error with pair between %s and %s (%s)' % (res1_seq_num,res2_seq_num,conformation))
-                # print('Error with pair between %s and %s (%s)' % (res1_seq_num,res2_seq_num,conformation))
-                continue
-
-            # Save the pair
-            pair = InteractingResiduePair()
-            pair.res1 = res1
-            pair.res2 = res2
-            pair.referenced_structure = s
-            pair.save()
-
-            # Add the interactions to the pair
-            for i in p.get_interactions():
-                if type(i) is ci.VanDerWaalsInteraction:
-                    ni = VanDerWaalsInteraction()
-                    ni.interacting_pair = pair
-                    ni.save()
-                elif type(i) is ci.HydrophobicInteraction:
-                    ni = HydrophobicInteraction()
-                    ni.interacting_pair = pair
-                    ni.save()
-                elif type(i) is ci.PolarSidechainSidechainInteraction:
-                    ni = PolarSidechainSidechainInteraction()
-                    ni.interacting_pair = pair
-                    ni.is_charged_res1 = i.is_charged_res1
-                    ni.is_charged_res2 = i.is_charged_res2
-                    ni.save()
-                elif type(i) is ci.PolarBackboneSidechainInteraction:
-                    ni = PolarBackboneSidechainInteraction()
-                    ni.interacting_pair = pair
-                    ni.is_charged_res1 = i.is_charged_res1
-                    ni.is_charged_res2 = i.is_charged_res2
-                    ni.res1_is_sidechain = False
-                    ni.save()
-                elif type(i) is ci.PolarSideChainBackboneInteraction:
-                    ni = PolarBackboneSidechainInteraction()
-                    ni.interacting_pair = pair
-                    ni.is_charged_res1 = i.is_charged_res1
-                    ni.is_charged_res2 = i.is_charged_res2
-                    ni.res1_is_sidechain = True
-                    ni.save()
-                elif type(i) is ci.FaceToFaceInteraction:
-                    ni = FaceToFaceInteraction()
-                    ni.interacting_pair = pair
-                    ni.save()
-                elif type(i) is ci.FaceToEdgeInteraction:
-                    ni = FaceToEdgeInteraction()
-                    ni.interacting_pair = pair
-                    ni.res1_has_face = True
-                    ni.save()
-                elif type(i) is ci.EdgeToFaceInteraction:
-                    ni = FaceToEdgeInteraction()
-                    ni.interacting_pair = pair
-                    ni.res1_has_face = False
-                    ni.save()
-                elif type(i) is ci.PiCationInteraction:
-                    ni = PiCationInteraction()
-                    ni.interacting_pair = pair
-                    ni.res1_has_pi = True
-                    ni.save()
-                elif type(i) is ci.CationPiInteraction:
-                    ni = PiCationInteraction()
-                    ni.interacting_pair = pair
-                    ni.res1_has_pi = False
-                    ni.save()
 
 
     def main_func(self, positions, iteration,count,lock):
@@ -912,13 +910,15 @@ class Command(BaseBuild):
         while count.value<len(filenames):
             with lock:
                 source_file = filenames[count.value]
-                count.value +=1 
+                count.value +=1
             source_file_path = os.sep.join([self.structure_data_dir, source_file])
+            # sbc = StructureBuildCheck()
             # if source_file != "2RH1.yaml":
             #     continue
             if os.path.isfile(source_file_path) and source_file[0] != '.':
                 with open(source_file_path, 'r') as f:
-                    sd = yaml.load(f)
+                    sd = yaml.load(f, Loader=yaml.FullLoader)
+
                     # is this a representative structure (will be used to guide structure-based alignments)?
                     representative = False
                     if 'representative' in sd and sd['representative']:
@@ -956,7 +956,6 @@ class Command(BaseBuild):
                         # If update_flag is true then update existing structures
                         # Otherwise only make new structures
                         if not self.incremental_mode:
-                            self.purge_contact_network(s)
                             s = s.delete()
                             s = Structure()
                         else:
@@ -964,7 +963,7 @@ class Command(BaseBuild):
 
                     except Structure.DoesNotExist:
                         s = Structure()
-                    
+
                     s.representative = representative
 
                     # protein state
@@ -1053,6 +1052,8 @@ class Command(BaseBuild):
                     if 'structure_method' in sd and sd['structure_method']:
                         structure_type = sd['structure_method'].capitalize()
                         structure_type_slug = slugify(sd['structure_method'])
+                        if sd['pdb']=='6ORV':
+                            structure_type_slug = 'electron-microscopy'
 
                         try:
                             st, created = StructureType.objects.get_or_create(slug=structure_type_slug,
@@ -1088,13 +1089,8 @@ class Command(BaseBuild):
 
                     # pdb code
                     if 'pdb' in sd:
-                        try:
-                            web_resource = WebResource.objects.get(slug='pdb')
-                        except:
-                            # abort if pdb resource is not found
-                            raise Exception('PDB resource not found, aborting!')
-                        s.pdb_code, created = WebLink.objects.get_or_create(index=sd['pdb'],
-                            web_resource=web_resource)
+                        web_resource = WebResource.objects.get(slug='pdb')
+                        s.pdb_code, created = WebLink.objects.get_or_create(index=sd['pdb'], web_resource=web_resource)
                     else:
                         self.logger.error('PDB code not specified for structure {}, skipping!'.format(sd['pdb']))
                         continue
@@ -1106,8 +1102,12 @@ class Command(BaseBuild):
                         self.logger.warning('Preferred chain not specified for structure {}'.format(sd['pdb']))
                     if 'resolution' in sd:
                         s.resolution = float(sd['resolution'])
+                        if sd['pdb']=='6ORV':
+                            s.resolution = 3.00
                     else:
                         self.logger.warning('Resolution not specified for structure {}'.format(sd['pdb']))
+                    if sd['pdb']=='6ORV':
+                        sd['publication_date'] = '2020-01-08'
                     if 'publication_date' in sd:
                         s.publication_date = sd['publication_date']
                     else:
@@ -1153,37 +1153,38 @@ class Command(BaseBuild):
                         s.annotated = False
 
                     s.refined = False
+                    s.stats_text = None
 
                     # save structure before adding M2M relations
                     s.save()
                     # StructureLigandInteraction.objects.filter(structure=s).delete()
 
                     # endogenous ligand(s)
-                    default_ligand_type = 'Small molecule'
-                    if representative and 'endogenous_ligand' in sd and sd['endogenous_ligand']:
-                        if isinstance(sd['endogenous_ligand'], list):
-                            endogenous_ligands = sd['endogenous_ligand']
-                        else:
-                            endogenous_ligands = [sd['endogenous_ligand']]
-                        for endogenous_ligand in endogenous_ligands:
-                            if endogenous_ligand['type']:
-                                lt, created = LigandType.objects.get_or_create(slug=slugify(endogenous_ligand['type']),
-                                    defaults={'name': endogenous_ligand['type']})
-                            else:
-                                lt, created = LigandType.objects.get_or_create(slug=slugify(default_ligand_type),
-                                    defaults={'name': default_ligand_type})
-                            ligand = Ligand()
+                    # default_ligand_type = 'Small molecule'
+                    # if representative and 'endogenous_ligand' in sd and sd['endogenous_ligand']:
+                    #     if isinstance(sd['endogenous_ligand'], list):
+                    #         endogenous_ligands = sd['endogenous_ligand']
+                    #     else:
+                    #         endogenous_ligands = [sd['endogenous_ligand']]
+                    #     for endogenous_ligand in endogenous_ligands:
+                    #         if endogenous_ligand['type']:
+                    #             lt, created = LigandType.objects.get_or_create(slug=slugify(endogenous_ligand['type']),
+                    #                 defaults={'name': endogenous_ligand['type']})
+                    #         else:
+                    #             lt, created = LigandType.objects.get_or_create(slug=slugify(default_ligand_type),
+                    #                 defaults={'name': default_ligand_type})
+                    #         ligand = Ligand()
 
-                            if 'iupharId' not in endogenous_ligand:
-                                endogenous_ligand['iupharId'] = 0
+                    #         if 'iupharId' not in endogenous_ligand:
+                    #             endogenous_ligand['iupharId'] = 0
 
-                            ligand = ligand.load_by_gtop_id(endogenous_ligand['name'], endogenous_ligand['iupharId'],
-                                lt)
-                            try:
-                                s.protein_conformation.protein.parent.endogenous_ligands.add(ligand)
-                            except IntegrityError:
-                                self.logger.info('Endogenous ligand for protein {}, already added. Skipping.'.format(
-                                    s.protein_conformation.protein.parent))
+                    #         ligand = ligand.load_by_gtop_id(endogenous_ligand['name'], endogenous_ligand['iupharId'],
+                    #             lt)
+                    #         try:
+                    #             s.protein_conformation.protein.parent.endogenous_ligands.add(ligand)
+                    #         except IntegrityError:
+                    #             self.logger.info('Endogenous ligand for protein {}, already added. Skipping.'.format(
+                    #                 s.protein_conformation.protein.parent))
 
                     # ligands
                     peptide_chain = ""
@@ -1235,7 +1236,8 @@ class Command(BaseBuild):
 
                                     # create empty properties
                                     lp = LigandProperities.objects.create()
-
+                                    lp.ligand_type = lt
+                                    lp.save()
                                     # create the ligand
                                     try:
                                         l, created = Ligand.objects.get_or_create(name=ligand['name'], canonical=True,
@@ -1485,6 +1487,9 @@ class Command(BaseBuild):
                     try:
                         current = time.time()
                         self.create_rotamers(s,pdb_path,d)
+                        # residue_errors = sbc.check_rotamers(s.pdb_code.index)
+                        # if len(residue_errors)>0:
+                        #     raise Exception('Error with rotamer check: {}'.format(residue_errors))
                         end = time.time()
                         diff = round(end - current,1)
                         self.logger.info('Create resides/rotamers done for {}. {} seconds.'.format(
@@ -1530,7 +1535,7 @@ class Command(BaseBuild):
                                 mypath = '/tmp/interactions/results/' + sd['pdb'] + '/output'
                                 # if not os.path.isdir(mypath):
                                 #     #Only run calcs, if not already in temp
-                                runcalculation(sd['pdb'],peptide_chain)
+                                runcalculation(sd['pdb'], peptide_chain)
 
                                 parsecalculation(sd['pdb'],False)
                                 end = time.time()

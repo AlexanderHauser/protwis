@@ -15,6 +15,7 @@ urlpatterns = [
     url(r'^expandsegment', views.ExpandSegment, name='expandsegment'),
     url(r'^selectfullsequence', views.SelectFullSequence, name='selectfullsequence'),
     url(r'^selectalignablesegments', views.SelectAlignableSegments, name='selectalignablesegments'),
+    url(r'^selectalignableresidues', views.SelectAlignableResidues, name='selectalignableresidues'),
     url(r'selectionschemespredefined', views.SelectionSchemesPredefined, name='selectionschemespredefined'),
     url(r'selectionschemestoggle', views.SelectionSchemesToggle, name='selectionschemestoggle'),
     url(r'settreeselection', views.SetTreeSelection, name='settreeselection'),
@@ -32,4 +33,5 @@ urlpatterns = [
     url(r'^exportexcelmodifications$', views.ExportExcelModifications, name='exportexcelmodifications'),
     url(r'^exportexceldownload/(?P<ts>[^/]*?)/(?P<entry_name>.+)$', views.ExportExcelDownload, name='exportexceldownload'),
     url(r'^importexcel$', views.ImportExcel, name='importexcel'),
+    url(r'^convertsvg$', views.ConvertSVG, name='convertsvg'),
 ]

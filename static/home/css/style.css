@@ -3,7 +3,15 @@
 h1, h2, h3, h4 { margin-top: 0px; }
 
 .carousel-caption{
-    background: rgba(0,0,0,0.6);
+    background: rgba(0,0,0,0.8);
+}
+
+.carousel-inner > .item > img, .carousel-inner > .item > a > img {
+    /*width: 80%;*/
+    /*height: 300px;*/
+    display: block;
+    margin-left: auto;
+    margin-right: auto;
 }
 
 .main-logo { height:20px;width:20px; }
@@ -110,6 +118,10 @@ input.form-control {
     -moz-border-radius: 0 6px 6px;
     border-radius: 0 6px 6px 6px;
 }
+h3.dropleft .dropleft>.dropdown-menu {
+    right: 100% !important;
+    left: auto !important;
+}
 
 .dropdown-submenu:hover>.dropdown-menu {
     display: block;
@@ -150,4 +162,21 @@ rect.segment {
 }
 text.segment {
     cursor: pointer;
+}
+
+.selection_buttons {
+    margin-top: 5px;
+}
+
+.structure_overlay::-webkit-scrollbar { /* WebKit */
+    width: 0;
+    height: 0;
+}
+.structure_overlay {
+    -webkit-transform: translateZ(0);
+    -webkit-backface-visibility: hidden;
+}
+
+.panel-primary {
+    border-color: rgba(0,0,0,0.2);
 }
